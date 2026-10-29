@@ -10,6 +10,10 @@ RUN npm run build
 # Stage 2: Build Go binaries
 FROM docker.io/golang:alpine AS builder
 ARG GARM_REF
+# Space separated list of provider repositories to build. An entry may pin a
+# branch, tag or commit with "owner/repo@ref"; entries without a ref use main
+# for GARM_REF=main and the provider's latest release otherwise.
+ARG GARM_PROVIDERS="cloudbase/garm-provider-azure cloudbase/garm-provider-openstack cloudbase/garm-provider-lxd cloudbase/garm-provider-incus cloudbase/garm-provider-aws cloudbase/garm-provider-gcp flatcar/garm-provider-linode mercedes-benz/garm-provider-k8s nexthop-ai/garm-provider-cloudstack"
 
 LABEL stage=builder
 
@@ -36,25 +40,20 @@ RUN cd /build/garm/cmd/garm-cli \
       . && upx /bin/garm-cli
 RUN set -ex; \
     mkdir -p /opt/garm/providers.d; \
-    for repo in \
-      cloudbase/garm-provider-azure \
-      cloudbase/garm-provider-openstack \
-      cloudbase/garm-provider-lxd \
-      cloudbase/garm-provider-incus \
-      cloudbase/garm-provider-aws \
-      cloudbase/garm-provider-gcp \
-      flatcar/garm-provider-linode \
-      mercedes-benz/garm-provider-k8s \
-      nexthop-ai/garm-provider-cloudstack; \
+    for entry in $GARM_PROVIDERS; \
     do \
+        repo="${entry%@*}"; \
         export PROVIDER_NAME="$(basename $repo)"; \
         export PROVIDER_SUBDIR=""; \
-        if [ "$GARM_REF" == "main" ]; then \
+        if [ "$entry" != "$repo" ]; then \
+          export PROVIDER_REF="${entry#*@}"; \
+        elif [ "$GARM_REF" == "main" ]; then \
           export PROVIDER_REF="main"; \
         else \
           export PROVIDER_REF="$(curl -s -L https://api.github.com/repos/$repo/releases/latest | jq -r '.tag_name')"; \
         fi; \
-        git clone --branch "$PROVIDER_REF" "https://github.com/$repo" "/build/$PROVIDER_NAME"; \
+        git clone "https://github.com/$repo" "/build/$PROVIDER_NAME" \
+        && git -C "/build/$PROVIDER_NAME" checkout "$PROVIDER_REF"; \
         case $PROVIDER_NAME in \
         "garm-provider-k8s") \
             export PROVIDER_SUBDIR="cmd/garm-provider-k8s"; \
@@ -77,15 +76,9 @@ FROM busybox
 
 COPY --from=builder /bin/garm /bin/garm
 COPY --from=builder /bin/garm-cli /bin/garm-cli
-COPY --from=builder /opt/garm/providers.d/garm-provider-openstack /opt/garm/providers.d/garm-provider-openstack
-COPY --from=builder /opt/garm/providers.d/garm-provider-lxd /opt/garm/providers.d/garm-provider-lxd
-COPY --from=builder /opt/garm/providers.d/garm-provider-incus /opt/garm/providers.d/garm-provider-incus
-COPY --from=builder /opt/garm/providers.d/garm-provider-azure /opt/garm/providers.d/garm-provider-azure
-COPY --from=builder /opt/garm/providers.d/garm-provider-aws /opt/garm/providers.d/garm-provider-aws
-COPY --from=builder /opt/garm/providers.d/garm-provider-gcp /opt/garm/providers.d/garm-provider-gcp
-
-COPY --from=builder /opt/garm/providers.d/garm-provider-k8s /opt/garm/providers.d/garm-provider-k8s
-COPY --from=builder /opt/garm/providers.d/garm-provider-cloudstack /opt/garm/providers.d/garm-provider-cloudstack
+COPY --from=builder /opt/garm/providers.d/ /opt/garm/providers.d/
 COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 
-ENTRYPOINT ["/bin/garm", "--config", "/etc/garm/config.toml"]
+COPY contrib/vizmo/garm-entrypoint.sh /bin/garm-entrypoint.sh
+
+ENTRYPOINT ["/bin/sh", "/bin/garm-entrypoint.sh"]
