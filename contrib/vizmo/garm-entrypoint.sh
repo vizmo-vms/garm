@@ -48,10 +48,34 @@ literal() {
 : "${AZURE_SUBSCRIPTION_ID:?AZURE_SUBSCRIPTION_ID is required}"
 : "${AZURE_TENANT_ID:?AZURE_TENANT_ID is required}"
 : "${AZURE_CLIENT_ID:?AZURE_CLIENT_ID is required}"
-: "${AZURE_CLIENT_SECRET:?AZURE_CLIENT_SECRET is required}"
+
+# The service principal signs in with either a client secret or a
+# certificate. AZURE_CLIENT_CERTIFICATE holds the PEM with the certificate
+# and private key, as-is or base64 encoded (one line, easier to paste).
+AZURE_CLIENT_SECRET="${AZURE_CLIENT_SECRET:-}"
+AZURE_CLIENT_CERTIFICATE="${AZURE_CLIENT_CERTIFICATE:-}"
+if [ -z "$AZURE_CLIENT_SECRET" ] && [ -z "$AZURE_CLIENT_CERTIFICATE" ]; then
+	die "set AZURE_CLIENT_SECRET or AZURE_CLIENT_CERTIFICATE"
+fi
+if [ -n "$AZURE_CLIENT_SECRET" ] && [ -n "$AZURE_CLIENT_CERTIFICATE" ]; then
+	die "set only one of AZURE_CLIENT_SECRET and AZURE_CLIENT_CERTIFICATE"
+fi
 
 umask 077
 mkdir -p "$CONFIG_DIR" "$DATA_DIR"
+
+AZURE_CERTIFICATE_FILE="$CONFIG_DIR/azure-sp.pem"
+if [ -n "$AZURE_CLIENT_CERTIFICATE" ]; then
+	case "$AZURE_CLIENT_CERTIFICATE" in
+	*"-----BEGIN"*) printf '%s\n' "$AZURE_CLIENT_CERTIFICATE" >"$AZURE_CERTIFICATE_FILE" ;;
+	*) printf '%s' "$AZURE_CLIENT_CERTIFICATE" | base64 -d >"$AZURE_CERTIFICATE_FILE" ||
+		die "AZURE_CLIENT_CERTIFICATE is neither PEM nor valid base64" ;;
+	esac
+	grep -q -- "-----BEGIN CERTIFICATE-----" "$AZURE_CERTIFICATE_FILE" ||
+		die "AZURE_CLIENT_CERTIFICATE has no certificate"
+	grep -q -- "PRIVATE KEY-----" "$AZURE_CERTIFICATE_FILE" ||
+		die "AZURE_CLIENT_CERTIFICATE has no private key"
+fi
 
 JWT_SECRET="${GARM_JWT_SECRET:-$(persistent_secret "$DATA_DIR/jwt_secret" 64)}"
 DB_PASSPHRASE="${GARM_DB_PASSPHRASE:-$(persistent_secret "$DATA_DIR/db_passphrase" 32)}"
@@ -64,7 +88,11 @@ location=$(literal AZURE_LOCATION "$AZURE_LOCATION")
 subscription_id=$(literal AZURE_SUBSCRIPTION_ID "$AZURE_SUBSCRIPTION_ID")
 tenant_id=$(literal AZURE_TENANT_ID "$AZURE_TENANT_ID")
 client_id=$(literal AZURE_CLIENT_ID "$AZURE_CLIENT_ID")
-client_secret=$(literal AZURE_CLIENT_SECRET "$AZURE_CLIENT_SECRET")
+if [ -n "$AZURE_CLIENT_CERTIFICATE" ]; then
+	client_credential="client_certificate_path = $(literal GARM_CONFIG_DIR "$AZURE_CERTIFICATE_FILE")"
+else
+	client_credential="client_secret = $(literal AZURE_CLIENT_SECRET "$AZURE_CLIENT_SECRET")"
+fi
 vnet_cidr=$(literal AZURE_VNET_CIDR "${AZURE_VNET_CIDR:-10.10.0.0/24}")
 
 cat >"$CONFIG_FILE" <<EOF
@@ -121,7 +149,7 @@ subscription_id = $subscription_id
 [credentials.service_principal]
 tenant_id = $tenant_id
 client_id = $client_id
-client_secret = $client_secret
+$client_credential
 EOF
 
 exec /bin/garm --config "$CONFIG_FILE" "$@"

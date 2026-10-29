@@ -10,9 +10,9 @@ permissions:
 
 env:
   # The Azure provider from the vizmo-vms fork: upstream main plus
-  # cloudbase/garm-provider-azure#80 (Spot), #81 (create rollback) and
-  # #82 (Standard public IPv4). Pinned by commit.
-  GARM_PROVIDERS: "vizmo-vms/garm-provider-azure@f5e3a2f19d7439627aa25d8084ed46ed57ab1f9e"
+  # cloudbase/garm-provider-azure#80 (Spot), #81 (create rollback), #82
+  # (Standard public IPv4) and service principal certificates. Pinned by commit.
+  GARM_PROVIDERS: "vizmo-vms/garm-provider-azure@68119f5b46ada17c66681629c1a8a36f566b0d59"
 
 jobs:
   build:
